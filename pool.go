@@ -1,7 +1,6 @@
 package gpool
 
 import (
-	"fmt"
 	"log"
 	"runtime"
 	"sync"
@@ -85,7 +84,7 @@ func (p *pool) Run(taskFunc TaskFunc) {
 	case chanLen < chanCap:
 		p.taskChan <- task
 	case chanLen == chanCap && p.curNum < p.maxNum:
-		// 缓冲区已满且当前Go程数量小于 maxNum，则启动新的Go程执行任务
+		//缓冲区已满且当前Go程数量小于 maxNum，则启动新的Go程执行任务
 		p.curNum++
 		go func() {
 			defer atomic.AddInt32(&p.curNum, -1)
