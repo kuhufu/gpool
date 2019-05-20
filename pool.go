@@ -83,12 +83,10 @@ func (p *pool) Run(taskFunc TaskFunc) {
 	chanCap := cap(p.taskChan)
 	switch {
 	case chanLen < chanCap:
-		fmt.Println("enter task channel")
 		p.taskChan <- task
 	case chanLen == chanCap && p.curNum < p.maxNum:
 		// 缓冲区已满且当前Go程数量小于 maxNum，则启动新的Go程执行任务
 		p.curNum++
-		fmt.Println("run on new goroutine")
 		go func() {
 			defer atomic.AddInt32(&p.curNum, -1)
 			task()
@@ -97,10 +95,8 @@ func (p *pool) Run(taskFunc TaskFunc) {
 		//调用方执行: 在调用 Run方法 的Go程中执行
 		switch p.policy {
 		case ByCaller:
-			fmt.Println("run by caller")
 			task()
 		case ByChan:
-			fmt.Println("enter task channel")
 			p.taskChan <- task
 		}
 	}
