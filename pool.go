@@ -7,21 +7,23 @@ import (
 	"sync/atomic"
 )
 
+//ByChan 等待taskChan缓冲区出现空位
+//ByCaller 调用方执行
 const (
 	ByChan = iota
 	ByCaller
 )
 
 type pool struct {
-	coreNum  int32
-	maxNum   int32
-	curNum   int32
-	taskChan chan TaskFunc
-	done     chan int
-	wg       *sync.WaitGroup
-	mu       *sync.Mutex
-	policy   int
-	closed   bool
+	coreNum  int32           //核心Go程数量
+	maxNum   int32           //最大Go程数量
+	curNum   int32           //当前Go程数量
+	taskChan chan TaskFunc   //任务通道
+	done     chan int        //通知核心Go程退出
+	wg       *sync.WaitGroup //用于等待所有任务完成
+	mu       *sync.Mutex     //保证正确的选择策略
+	policy   int             //策略
+	closed   bool            //pool是否已关闭
 }
 
 type TaskFunc func()
@@ -71,7 +73,6 @@ func (p *pool) start() {
 	}
 }
 
-//Close 关闭后执行 Run 方法行为是不可预测的
 func (p *pool) Run(taskFunc TaskFunc) {
 	p.wg.Add(1)
 	task := p.taskWrapper(taskFunc)
@@ -82,6 +83,7 @@ func (p *pool) Run(taskFunc TaskFunc) {
 	chanCap := cap(p.taskChan)
 	switch {
 	case chanLen < chanCap:
+		//缓冲区未满，进入缓冲区
 		p.taskChan <- task
 	case chanLen == chanCap && p.curNum < p.maxNum:
 		//缓冲区已满且当前Go程数量小于 maxNum，则启动新的Go程执行任务
@@ -91,7 +93,6 @@ func (p *pool) Run(taskFunc TaskFunc) {
 			task()
 		}()
 	case chanLen == chanCap && p.curNum == p.maxNum:
-		//调用方执行: 在调用 Run方法 的Go程中执行
 		switch p.policy {
 		case ByCaller:
 			task()
@@ -117,7 +118,7 @@ func (p *pool) Wait() {
 	p.wg.Wait()
 }
 
-// Close 调用之后就不应该再使用该pool
+// Close 调用之后不应再使用该pool
 func (p *pool) Close() {
 	close(p.done) //通知核心Go程退出
 	p.taskChan = nil
