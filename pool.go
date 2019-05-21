@@ -28,6 +28,7 @@ type pool struct {
 
 type TaskFunc func()
 
+//New 灵活的创建 pool
 func New(coreNum, maxNum, bufLen int, policy int) *pool {
 	if maxNum < coreNum {
 		maxNum = coreNum
@@ -47,15 +48,18 @@ func New(coreNum, maxNum, bufLen int, policy int) *pool {
 	return p
 }
 
+//NewFixed 创建 coreNum == maxNum 的 pool
 func NewFixed(num, bufLen int) *pool {
 	return New(num, num, bufLen, ByChan)
 }
 
+//NewDefault 根据当前机器 cpu 核心数创建 pool
 func NewDefault() *pool {
 	n := runtime.NumCPU()
 	return New(n, n, n, ByChan)
 }
 
+//start 启动核心 Go 程
 func (p *pool) start() {
 	for i := int32(0); i < p.coreNum; i++ {
 		go func() {
@@ -73,6 +77,7 @@ func (p *pool) start() {
 	}
 }
 
+//Run 添加任务
 func (p *pool) Run(taskFunc TaskFunc) {
 	p.wg.Add(1)
 	task := p.taskWrapper(taskFunc)
@@ -93,6 +98,7 @@ func (p *pool) Run(taskFunc TaskFunc) {
 			task()
 		}()
 	case chanLen == chanCap && p.curNum == p.maxNum:
+		//缓冲区已满且已达最大Go程数，这时候采用相关策略
 		switch p.policy {
 		case ByCaller:
 			task()
@@ -102,6 +108,7 @@ func (p *pool) Run(taskFunc TaskFunc) {
 	}
 }
 
+//taskWrapper 包装 TaskFunc
 func (p *pool) taskWrapper(taskFunc TaskFunc) TaskFunc {
 	return func() {
 		defer p.wg.Done()
@@ -109,16 +116,18 @@ func (p *pool) taskWrapper(taskFunc TaskFunc) TaskFunc {
 	}
 }
 
+//WaitAndClose 等待全部任务结束并关闭 pool
 func (p *pool) WaitAndClose() {
 	p.Wait()
 	p.Close()
 }
 
+//Wait 等待全部任务结束
 func (p *pool) Wait() {
 	p.wg.Wait()
 }
 
-// Close 调用之后不应再使用该pool
+//Close 关闭 pool，调用之后不应再使用该 pool
 func (p *pool) Close() {
 	close(p.done) //通知核心Go程退出
 	p.taskChan = nil
