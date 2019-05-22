@@ -59,22 +59,25 @@ func NewDefault() *pool {
 	return New(n, n, n, ByChan)
 }
 
-//start 启动核心 Go 程
+//start 启动所有核心 Go 程
 func (p *pool) start() {
 	for i := int32(0); i < p.coreNum; i++ {
-		go func() {
-		label:
-			for {
-				select {
-				case <-p.done:
-					break label
-				case t := <-p.taskChan:
-					t()
-				}
-			}
-			log.Println("gpool:", "core goroutine exit")
-		}()
+		go p.startNewCoreRoutine()
 	}
+}
+
+//startNewCoreRoutine 启动一个核心 Go 程
+func (p *pool) startNewCoreRoutine() {
+label:
+	for {
+		select {
+		case <-p.done:
+			break label
+		case t := <-p.taskChan:
+			t()
+		}
+	}
+	log.Println("gpool:", "core goroutine exit")
 }
 
 //Run 添加任务
