@@ -10,11 +10,9 @@ import (
 //ByChan 等待taskChan缓冲区出现空位
 //ByCaller 调用方执行
 const (
-	ByChan = policy(iota)
+	ByChan = iota
 	ByCaller
 )
-
-type policy int
 
 type pool struct {
 	coreNum  int32           //核心Go程数量
@@ -24,14 +22,14 @@ type pool struct {
 	done     chan int        //通知核心Go程退出
 	wg       *sync.WaitGroup //用于等待所有任务完成
 	mu       *sync.Mutex     //保证正确的选择策略
-	policy   policy          //策略
+	policy   int             //策略
 	closed   bool            //pool是否已关闭
 }
 
 type TaskFunc func()
 
 //New 灵活的创建 pool
-func New(coreNum, maxNum, bufLen int, policy policy) *pool {
+func New(coreNum, maxNum, bufLen int, policy int) *pool {
 	if maxNum < coreNum {
 		maxNum = coreNum
 	}
