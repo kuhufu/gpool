@@ -3,10 +3,10 @@ package gpool
 import (
 	"errors"
 	"log"
+	"math"
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 type policy byte
@@ -36,6 +36,7 @@ type Pool struct {
 	mu                 *sync.Mutex     //保证正确的选择策略
 	policy             policy          //策略
 	closed             bool            //pool是否已关闭
+	taskNum            int32           //当前任务数
 }
 
 //New 灵活的创建 Pool
@@ -55,7 +56,6 @@ func New(coreNum, maxNum, bufLen int, policy policy) *Pool {
 		mu:                 &sync.Mutex{},
 		policy:             policy,
 	}
-	p.start()
 	return p
 }
 
@@ -67,11 +67,11 @@ func NewFixed(num, bufLen int) *Pool {
 //NewDefault 根据当前机器 cpu 核心数创建 Pool
 func NewDefault() *Pool {
 	n := runtime.NumCPU()
-	return New(n, n, n, ByChan)
+	return New(n, math.MaxInt32, n, ByChan)
 }
 
-//start 启动所有核心 Go 程
-func (p *Pool) start() {
+//Start 启动所有核心 Go 程
+func (p *Pool) Start() {
 	for i := int32(0); i < p.coreNum; i++ {
 		go p.startNewCoreRoutine()
 	}
@@ -86,47 +86,61 @@ label:
 			break label
 		case t := <-p.taskChan:
 			t.run()
+			atomic.AddInt32(&p.taskNum, -1)
 		case <-p.shutdownGracefully:
-			if len(p.taskChan) == 0 {
-				time.Sleep(time.Millisecond) //避免巧合情况发生
-				if len(p.taskChan) == 0 {
-					break label
-				}
-			}
-
 			select {
 			case t := <-p.taskChan:
 				t.run()
 			default:
-				break
+				if p.isEmpty() {
+					break
+				}
 			}
 		}
 	}
 	log.Println("gpool:", "core goroutine exit")
 }
 
+func (p *Pool) newRunTask(fn RunTaskFunc) task {
+	return &RunTask{
+		fn: func() {
+			defer p.wg.Done()
+			fn()
+		},
+		done: make(chan interface{}),
+	}
+}
+
+func (p *Pool) newCallTask(fn CallTaskFunc) task {
+	return &CallTask{
+		fn: func() interface{} {
+			defer p.wg.Done()
+			return fn()
+		},
+		done: make(chan interface{}),
+	}
+}
+
 func (p *Pool) Run(fn RunTaskFunc) (result Result) {
-	t := NewRunTask(fn, p.wg)
-	return p.execute(t)
+	return p.execute(p.newRunTask(fn))
 }
 
 func (p *Pool) Call(fn CallTaskFunc) (result Result) {
-	t := NewCallTask(fn, p.wg)
-	return p.execute(t)
+	return p.execute(p.newCallTask(fn))
 }
 
 //Run 添加任务
 func (p *Pool) execute(taskItem task) (result Result) {
+	p.wg.Add(1)
 
 	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if p.closed {
-		p.mu.Unlock()
-		taskItem.setError(ErrPoolAlreadyClosed)
-		taskItem.closeDone()
+		taskItem.abortWithErr(ErrPoolAlreadyClosed)
+		atomic.AddInt32(&p.taskNum, -1)
 		return taskItem
 	}
-
-	p.wg.Add(1)
 
 	chanLen := len(p.taskChan)
 	chanCap := cap(p.taskChan)
@@ -143,7 +157,6 @@ func (p *Pool) execute(taskItem task) (result Result) {
 		}()
 	case p.curNum == p.maxNum && chanLen == chanCap:
 		//缓冲区已满且已达最大Go程数，这时候采用相关策略
-		p.mu.Unlock() //在这个阶段，可以直接unlock了，在这个case里后续没有数据竞争
 		switch p.policy {
 		case ByCaller:
 			taskItem.run()
@@ -154,7 +167,6 @@ func (p *Pool) execute(taskItem task) (result Result) {
 		}
 		return taskItem
 	}
-	p.mu.Unlock()
 	return taskItem
 }
 
@@ -174,29 +186,31 @@ func (p *Pool) ShutdownDirectly() {
 	close(p.shutdownDirectly) //通知核心Go程退出
 	p.mu.Unlock()
 
-	p.Empty()
+	go p.Empty()
 }
 
 //ShutdownGracefully 不再接受新的task，会继续处理已提交的task
 func (p *Pool) ShutdownGracefully() {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.closed {
-		p.mu.Unlock()
 		return
 	}
 	p.closed = true
 	close(p.shutdownGracefully)
-	p.mu.Unlock()
 	log.Println("shutdown gracefully")
 }
 
 // Closed 是否已关闭
 func (p *Pool) Closed() bool {
-	var closed bool
 	p.mu.Lock()
-	closed = p.closed
-	p.mu.Unlock()
-	return closed
+	defer p.mu.Unlock()
+
+	return p.closed
+}
+
+func (p *Pool) isEmpty() bool {
+	return atomic.LoadInt32(&p.taskNum) == 0
 }
 
 // Empty 清空任务队列
@@ -206,8 +220,7 @@ func (p *Pool) Empty() {
 		case t := <-p.taskChan:
 			t.discard()
 		default:
-			time.Sleep(time.Millisecond) //避免巧合情况发生
-			if len(p.taskChan) == 0 {
+			if p.isEmpty() {
 				return
 			}
 		}
