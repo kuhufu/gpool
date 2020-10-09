@@ -4,12 +4,12 @@ type Option func(g *GPool)
 
 func WithCoreNum(num int) Option {
 	return func(g *GPool) {
-		g.coreNum = num
+		g.workerNum = num
 	}
 }
 
-func WithMaxNum(num int) Option {
+func WithQueueLen(num int) Option {
 	return func(g *GPool) {
-		g.maxNum = num
+		g.taskChan = make(chan Task, num)
 	}
 }
