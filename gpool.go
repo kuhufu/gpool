@@ -91,8 +91,10 @@ func (g *GPool) Do(taskFunc func()) <-chan struct{} {
 		}
 	} else {
 		g.currWorkerNum.Incr(1)
+		g.wg.Add(1)
 		go func() {
 			defer func() {
+				g.wg.Done()
 				g.currTaskNum.Incr(-1)
 				close(doneC)
 				g.currWorkerNum.Incr(-1)
